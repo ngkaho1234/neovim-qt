@@ -13,7 +13,7 @@ namespace NeovimQt {
 
 Shell::Shell(NeovimConnector *nvim, QWidget *parent)
 :QWidget(parent), m_attached(false), m_nvim(nvim), m_rows(1), m_cols(1),
-	m_font_bold(false), m_font_italic(false), m_font_underline(false), m_fm(NULL),
+	m_font_bold(false), m_font_italic(false), m_font_underline(false), m_font_undercurl(false), m_fm(NULL),
 	m_foreground(Qt::black), m_background(Qt::white),
 	m_hg_foreground(Qt::black), m_hg_background(Qt::white),
 	m_cursor_color(Qt::white), m_cursor_pos(0,0), m_insertMode(false),
@@ -38,6 +38,11 @@ Shell::Shell(NeovimConnector *nvim, QWidget *parent)
 	setAttribute(Qt::WA_OpaquePaintEvent, true);
 
 	setFocusPolicy(Qt::StrongFocus);
+	setMouseTracking(true);
+	m_mouseclick_timer.setInterval(QApplication::doubleClickInterval());
+	m_mouseclick_timer.setSingleShot(true);
+	connect(&m_mouseclick_timer, &QTimer::timeout,
+			this, &Shell::mouseClickReset);
 
 	// IM Tooltip
 	setAttribute(Qt::WA_InputMethodEnabled, true);
@@ -219,7 +224,9 @@ void Shell::handleHighlightSet(const QVariantMap& attrs, QPainter& painter)
 	// TODO: undercurl
 	m_font_bold = attrs.value("bold").toBool();
 	m_font_italic = attrs.value("italic").toBool();
-	m_font_underline = attrs.value("undercurl").toBool();
+	m_font_undercurl = attrs.value("undercurl").toBool();
+	// enable underline ONLY if undercurl is already not on
+	m_font_underline = attrs.value("underline").toBool() && !m_font_undercurl;
 	setupPainter(painter);
 }
 
@@ -251,6 +258,16 @@ void Shell::handlePut(const QVariantList& args, QPainter& painter)
 		QPoint pos(m_cursor_pos.x()*neovimCellWidth(), m_cursor_pos.y()*neovimRowHeight()+m_fm->ascent());
 		painter.drawText(pos, text.at(0));
 
+		if (m_font_undercurl) {
+			// Draw "undercurl" at the bottom of the cell
+			// FIXME: use correct highlight color instead of red
+			// TODO: draw a proper undercurl
+			painter.setPen(QPen(Qt::red, 1, Qt::DashDotDotLine));
+			QPoint start = clipRect.bottomLeft();
+			QPoint end = clipRect.bottomRight();
+			start.ry()--; end.ry()--;
+			painter.drawLine(start, end);
+		}
 		painter.restore();
 	}
 
@@ -586,6 +603,107 @@ void Shell::keyPressEvent(QKeyEvent *ev)
 	// FIXME: bytes might not be written, and need to be buffered
 }
 
+void Shell::neovimMouseEvent(QMouseEvent *ev)
+{
+	QPoint pos(ev->x()/neovimCellWidth(),
+			ev->y()/neovimRowHeight());
+	QString inp;
+	if (ev->type() == QEvent::MouseMove) {
+		Qt::MouseButton bt;
+		if (ev->buttons() & Qt::LeftButton) {
+			bt = Qt::LeftButton;
+		} else if (ev->buttons() & Qt::RightButton) {
+			bt = Qt::RightButton;
+		} else if (ev->buttons() & Qt::MidButton) {
+			bt = Qt::MidButton;
+		} else {
+			return;
+		}
+		inp = Input.convertMouse(bt, ev->type(), ev->modifiers(), pos, 0);
+	} else {
+		inp = Input.convertMouse(ev->button(), ev->type(), ev->modifiers(), pos,
+						m_mouseclick_count);
+	}
+	if (inp.isEmpty()) {
+		return;
+	}
+	m_nvim->neovimObject()->vim_input(inp.toLatin1());
+}
+void Shell::mousePressEvent(QMouseEvent *ev)
+{
+	m_mouseclick_timer.start();
+	mouseClickIncrement(ev->button());
+	neovimMouseEvent(ev);
+}
+/** Reset state for mouse N-click tracking */
+void Shell::mouseClickReset()
+{
+	m_mouseclick_count = 0;
+	m_mouseclick_pending = Qt::NoButton;
+	m_mouseclick_timer.stop();
+}
+/**
+ * Increment consecutive mouse click count
+ *
+ * Since Vim only supports up to 4-click events the counter
+ * rotates after 4 clicks.
+ */
+void Shell::mouseClickIncrement(Qt::MouseButton bt)
+{
+	if (m_mouseclick_pending != Qt::NoButton && bt != m_mouseclick_pending) {
+		mouseClickReset();
+	}
+
+	m_mouseclick_pending = bt;
+	if (m_mouseclick_count > 3) {
+		m_mouseclick_count = 1;
+	} else {
+		m_mouseclick_count += 1;
+	}
+}
+void Shell::mouseReleaseEvent(QMouseEvent *ev)
+{
+	neovimMouseEvent(ev);
+}
+void Shell::mouseMoveEvent(QMouseEvent *ev)
+{
+	QPoint pos(ev->x()/neovimCellWidth(),
+			ev->y()/neovimRowHeight());
+	if (pos != m_mouse_pos) {
+		m_mouse_pos = pos;
+		mouseClickReset();
+		neovimMouseEvent(ev);
+	}
+}
+
+void Shell::wheelEvent(QWheelEvent *ev)
+{
+	int horiz, vert;
+	horiz = ev->angleDelta().x();
+	vert = ev->angleDelta().y();
+	if (horiz == 0 && vert == 0) {
+		return;
+	}
+
+	QPoint pos(ev->x()/neovimCellWidth(),
+			ev->y()/neovimRowHeight());
+
+	QString inp;
+	if (vert != 0) {
+		inp += QString("<%1ScrollWheel%2><%3,%4>")
+			.arg(Input.modPrefix(ev->modifiers()))
+			.arg(vert > 0 ? "Up" : "Down")
+			.arg(pos.x()).arg(pos.y());
+	}
+	if (horiz != 0) {
+		inp += QString("<%1ScrollWheel%2><%3,%4>")
+			.arg(Input.modPrefix(ev->modifiers()))
+			.arg(horiz > 0 ? "Right" : "Left")
+			.arg(pos.x()).arg(pos.y());
+	}
+	m_nvim->neovimObject()->vim_input(inp.toLatin1());
+}
+
 void Shell::resizeNeovim(const QSize& newSize)
 {
 	uint64_t cols = newSize.width()/neovimCellWidth();
@@ -632,7 +750,10 @@ void Shell::changeEvent( QEvent *ev)
 
 void Shell::closeEvent(QCloseEvent *ev)
 {
-	if (m_attached) {
+	if (m_attached &&
+		m_nvim->connectionType() == NeovimConnector::SpawnedConnection) {
+		// If attached to a spawned Neovim process, ignore the event
+		// and try to close Neovim as :qa
 		ev->ignore();
 		m_nvim->neovimObject()->vim_command("qa");
 	} else {

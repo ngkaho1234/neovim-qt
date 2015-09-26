@@ -6,6 +6,7 @@
 #include <QFont>
 #include <QBackingStore>
 #include <QLabel>
+#include <QTimer>
 #include "neovimconnector.h"
 
 namespace NeovimQt {
@@ -37,10 +38,13 @@ protected slots:
 	void neovimError(NeovimConnector::NeovimError);
 	void neovimExited(int);
 	void neovimResizeFinished();
+	void mouseClickReset();
+	void mouseClickIncrement(Qt::MouseButton bt);
 
 protected:
 	void tooltip(const QString& text);
 	virtual void inputMethodEvent(QInputMethodEvent *event) Q_DECL_OVERRIDE;
+	virtual void wheelEvent(QWheelEvent *event) Q_DECL_OVERRIDE;
 
 	int neovimWidth() const;
 	int neovimHeight() const;
@@ -68,6 +72,11 @@ protected:
 	virtual void handleSetTitle(const QVariantList& opargs);
 	virtual void handleSetScrollRegion(const QVariantList& opargs);
 	virtual void handleBusy(bool);
+
+	void neovimMouseEvent(QMouseEvent *ev);
+	virtual void mousePressEvent(QMouseEvent *ev) Q_DECL_OVERRIDE;
+	virtual void mouseReleaseEvent(QMouseEvent *ev) Q_DECL_OVERRIDE;
+	virtual void mouseMoveEvent(QMouseEvent *ev) Q_DECL_OVERRIDE;
 private:
 	bool m_attached;
         void setAttached(bool);
@@ -77,7 +86,7 @@ private:
 	QRect m_scroll_region;
 
 	QFont m_font;
-	bool m_font_bold, m_font_italic, m_font_underline;
+	bool m_font_bold, m_font_italic, m_font_underline, m_font_undercurl;
 	QFontMetrics *m_fm;
 
 	QImage m_image;
@@ -95,6 +104,11 @@ private:
 	bool m_resizing;
 	QLabel *m_tooltip;
         QPixmap m_logo;
+	QPoint m_mouse_pos;
+	// 2/3/4 mouse click tracking
+	QTimer m_mouseclick_timer;
+	short m_mouseclick_count;
+	Qt::MouseButton m_mouseclick_pending;
 
 	// Properties
 	bool m_neovimBusy;
