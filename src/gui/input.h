@@ -3,8 +3,6 @@
 
 #include <QHash>
 #include <QString>
-#include <QEvent>
-#include <QPoint>
 
 namespace NeovimQt {
 
@@ -17,7 +15,6 @@ public:
 
 	QHash<int, QString> specialKeys;
 	QHash<QString, QString> replaceKeys;
-	QString convertMouse(Qt::MouseButton bt, QEvent::Type type, Qt::KeyboardModifiers mod, QPoint pos);
 };
 
 extern InputConv Input;
